@@ -1,5 +1,6 @@
 # Indonesia-commodity-price-map
 Interactive map visualizing commodity prices across Indonesian provinces (2022-2024). This project presents an interactive geospatial visualization of daily commodity prices across Indonesian provinces using Python-based spatial programming techniques. Commodity price data are aggregated at the provincial level and visualized on an interactive web map using an OpenStreetMap basemap. The primary objective of this project is to support exploratory spatial analysis of regional commodity price variations through intuitive and accessible visualization. The final output is a standalone HTML map that enables users to interactively explore commodity price statistics via clickable provincial polygons and structured popups.
+<img width="1919" height="920" alt="image" src="https://github.com/user-attachments/assets/9daa42b5-05ec-4f75-9486-ed883c4bc0ec" />
 
 This project is an original academic work developed independently by Eileen Zeyyana Shinta, an International Undergraduate Program student in the Department of Geodetic Engineering, Universitas Gadjah Mada, Class of 2023. The design, implementation, analysis, and visualization presented in this project were conceived and executed by the author as part of an academic assignment in spatial programming.
 
