@@ -233,6 +233,80 @@ for year in sorted(agg_data['year'].unique()):
     print(f"      Commodities: {year_data['commodity'].nunique()}")
 
 # ============================================================================
+# PRICE PREDICTION (2025-2026)
+# ============================================================================
+print("\n[PREDICTION] Forecasting Prices for 2025-2026...")
+print("-"*80)
+
+from sklearn.linear_model import LinearRegression
+
+# Create prediction data
+prediction_data = []
+
+for province in agg_data['province'].unique():
+    for commodity in agg_data['commodity'].unique():
+        # Get historical data for this province-commodity combination
+        historical = agg_data[
+            (agg_data['province'] == province) & 
+            (agg_data['commodity'] == commodity)
+        ].copy()
+        
+        if len(historical) >= 2:  # Need at least 2 years for trend
+            # Prepare data for linear regression
+            X = historical[['year']].values
+            y_min = historical['min_price'].values
+            y_max = historical['max_price'].values
+            y_avg = historical['avg_price'].values
+            
+            # Train models
+            model_min = LinearRegression()
+            model_max = LinearRegression()
+            model_avg = LinearRegression()
+            
+            model_min.fit(X, y_min)
+            model_max.fit(X, y_max)
+            model_avg.fit(X, y_avg)
+            
+            # Predict for 2025 and 2026
+            for pred_year in [2025, 2026]:
+                pred_min = model_min.predict([[pred_year]])[0]
+                pred_max = model_max.predict([[pred_year]])[0]
+                pred_avg = model_avg.predict([[pred_year]])[0]
+                
+                # Ensure predictions are positive and reasonable
+                pred_min = max(pred_min, 0)
+                pred_max = max(pred_max, pred_min)
+                pred_avg = max(pred_avg, pred_min)
+                
+                # Calculate median as average of min and max
+                pred_median = (pred_min + pred_max) / 2
+                
+                prediction_data.append({
+                    'province': province,
+                    'commodity': commodity,
+                    'year': pred_year,
+                    'min_price': pred_min,
+                    'max_price': pred_max,
+                    'avg_price': pred_avg,
+                    'median_price': pred_median,
+                    'count': 0,  # Predicted data
+                    'is_predicted': True
+                })
+
+# Create prediction dataframe
+pred_df = pd.DataFrame(prediction_data)
+agg_data['is_predicted'] = False
+
+# Add flag to show which data is predicted
+print(f"✓ Generated {len(pred_df):,} predictions")
+print(f"   2025: {len(pred_df[pred_df['year'] == 2025]):,} predictions")
+print(f"   2026: {len(pred_df[pred_df['year'] == 2026]):,} predictions")
+
+# Combine historical and predicted data
+combined_data = pd.concat([agg_data, pred_df], ignore_index=True)
+print(f"✓ Combined data: {len(combined_data):,} records (historical + predicted)")
+
+# ============================================================================
 # BUILD MAP
 # ============================================================================
 print("\n[PHASE 7] Building Interactive Map...")
@@ -241,12 +315,12 @@ print("-"*80)
 # Prepare data dict
 print("Preparing data structure...")
 data_dict = {}
-for year in sorted(agg_data['year'].unique()):
+for year in sorted(combined_data['year'].unique()):
     year_key = int(year)  # Convert numpy.int32 to Python int
     data_dict[year_key] = {}
     for commodity in commodities:
         data_dict[year_key][str(commodity)] = {}
-        subset = agg_data[(agg_data['year'] == year) & (agg_data['commodity'] == commodity)]
+        subset = combined_data[(combined_data['year'] == year) & (combined_data['commodity'] == commodity)]
         for _, row in subset.iterrows():
             prov = str(row['province'])
             data_dict[year_key][str(commodity)][prov] = {
@@ -254,7 +328,8 @@ for year in sorted(agg_data['year'].unique()):
                 'max': float(row['max_price']),
                 'avg': float(row['avg_price']),
                 'median': float(row['median_price']) if pd.notna(row['median_price']) else float(row['avg_price']),
-                'count': int(row['count'])
+                'count': int(row['count']),
+                'is_predicted': bool(row['is_predicted'])
             }
 
 geojson_data = json.loads(gdf.to_json())
@@ -303,7 +378,7 @@ html_content = f"""<!DOCTYPE html>
     <div id="map"></div>
     <div class="info-panel">
         <h3>🗺️ Indonesia Commodity Prices</h3>
-        <p style="margin: 3px 0; font-size: 11px; color: #666;">Interactive price map (2022-2024)</p>
+        <p style="margin: 3px 0; font-size: 11px; color: #666;">Interactive price map (2022-2026)</p>
         <label for="year-select">📅 Select Year:</label>
         <select id="year-select" onchange="updateMap()">{years_html}</select>
         <label for="commodity-select">🛒 Select Commodity:</label>
@@ -313,7 +388,8 @@ html_content = f"""<!DOCTYPE html>
             • Select year and commodity<br>
             • Click any province for details<br>
             • Blue colors show price levels<br>
-            • Darker blue = Higher prices</small>
+            • Darker blue = Higher prices<br>
+            <span style="color: #ff6b00; font-weight: bold;">⚠️ 2025-2026 are predictions</span></small>
         </div>
         <div id="stats" style="margin-top: 10px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 11px;"></div>
     </div>
@@ -383,11 +459,21 @@ html_content = f"""<!DOCTYPE html>
                         click: e => {{
                             const prov = f.properties.province;
                             const d = data[prov];
-                            let html = `<div style="font-family:Arial; min-width:280px;"><div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:12px; margin:-10px -10px 10px -10px; border-radius: 5px 5px 0 0;"><h4 style="margin:0; font-size:16px;">📍 ${{prov}}</h4></div><p style="margin:5px 0; padding:5px; color:#555; font-size:13px;"><strong>🛒 Commodity:</strong> ${{commodity}}<br><strong>📅 Year:</strong> ${{year}}</p>`;
+                            let html = `<div style="font-family:Arial; min-width:280px;"><div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:12px; margin:-10px -10px 10px -10px; border-radius: 5px 5px 0 0;"><h4 style="margin:0; font-size:16px;">📍 ${{prov}}</h4></div><p style="margin:5px 0; padding:5px; color:#555; font-size:13px;"><strong>🛒 Commodity:</strong> ${{commodity}}<br><strong>📅 Year:</strong> ${{year}}${{year >= 2025 ? ' <span style="background:#ff9800; color:white; padding:2px 6px; border-radius:3px; font-size:10px; font-weight:bold;">PREDICTED</span>' : ''}}</p>`;
                             if (d) {{
                                 const range = d.max - d.min;
                                 const volatility = (range / d.avg * 100).toFixed(1);
-                                html += `<table style="width:100%; border-collapse:collapse; margin-top:10px;"><thead><tr style="background: linear-gradient(to right, #2196F3, #1976D2); color:white;"><th style="padding:8px; text-align:left; font-size:12px;">Metric</th><th style="padding:8px; text-align:right; font-size:12px;">Value (IDR)</th></tr></thead><tbody><tr style="background:#e3f2fd;"><td style="padding:8px; font-size:12px;"><strong>💰 Minimum</strong></td><td style="padding:8px; text-align:right; font-weight:bold; font-size:12px;">${{fmt(d.min)}}</td></tr><tr><td style="padding:8px; font-size:12px;"><strong>📊 Average</strong></td><td style="padding:8px; text-align:right; font-weight:bold; color:#1976D2; font-size:12px;">${{fmt(d.avg)}}</td></tr><tr style="background:#e3f2fd;"><td style="padding:8px; font-size:12px;"><strong>📈 Maximum</strong></td><td style="padding:8px; text-align:right; font-weight:bold; font-size:12px;">${{fmt(d.max)}}</td></tr><tr><td style="padding:8px; font-size:12px;">📏 Price Range</td><td style="padding:8px; text-align:right; font-size:12px;">${{fmt(range)}}</td></tr><tr style="background:#e3f2fd;"><td style="padding:8px; font-size:12px;">📋 Data Points</td><td style="padding:8px; text-align:right; font-size:12px;">${{d.count}}</td></tr></tbody></table><div style="margin-top:10px; padding:10px; background: linear-gradient(to right, #e8f5e9, #c8e6c9); border-left:4px solid #4CAF50; border-radius:4px;"><strong style="color:#2e7d32; font-size:12px;">📊 Volatility Index: ${{volatility}}%</strong><br><small style="color:#555; margin-top:3px; display:block;">${{volatility < 10 ? '✅ Stable prices' : volatility < 30 ? '⚠️ Moderate variation' : '🔴 High volatility'}}</small></div>`;
+                                const isPredicted = d.is_predicted || false;
+                                html += `<table style="width:100%; border-collapse:collapse; margin-top:10px;"><thead><tr style="background: linear-gradient(to right, #2196F3, #1976D2); color:white;"><th style="padding:8px; text-align:left; font-size:12px;">Metric</th><th style="padding:8px; text-align:right; font-size:12px;">Value (IDR)</th></tr></thead><tbody><tr style="background:#e3f2fd;"><td style="padding:8px; font-size:12px;"><strong>💰 Minimum</strong></td><td style="padding:8px; text-align:right; font-weight:bold; font-size:12px;">${{fmt(d.min)}}</td></tr><tr><td style="padding:8px; font-size:12px;"><strong>📊 Average</strong></td><td style="padding:8px; text-align:right; font-weight:bold; color:#1976D2; font-size:12px;">${{fmt(d.avg)}}</td></tr><tr style="background:#e3f2fd;"><td style="padding:8px; font-size:12px;"><strong>📈 Maximum</strong></td><td style="padding:8px; text-align:right; font-weight:bold; font-size:12px;">${{fmt(d.max)}}</td></tr><tr><td style="padding:8px; font-size:12px;">📏 Price Range</td><td style="padding:8px; text-align:right; font-size:12px;">${{fmt(range)}}</td></tr>`;
+                                if (!isPredicted) {{
+                                    html += `<tr style="background:#e3f2fd;"><td style="padding:8px; font-size:12px;">📋 Data Points</td><td style="padding:8px; text-align:right; font-size:12px;">${{d.count}}</td></tr>`;
+                                }}
+                                html += `</tbody></table>`;
+                                if (isPredicted) {{
+                                    html += `<div style="margin-top:10px; padding:10px; background: linear-gradient(to right, #fff3e0, #ffe0b2); border-left:4px solid #ff9800; border-radius:4px;"><strong style="color:#e65100; font-size:12px;">🔮 Prediction Notice</strong><br><small style="color:#555; margin-top:3px; display:block;">These prices are forecasted using linear regression based on 2022-2024 trends. Actual prices may vary.</small></div>`;
+                                }} else {{
+                                    html += `<div style="margin-top:10px; padding:10px; background: linear-gradient(to right, #e8f5e9, #c8e6c9); border-left:4px solid #4CAF50; border-radius:4px;"><strong style="color:#2e7d32; font-size:12px;">📊 Volatility Index: ${{volatility}}%</strong><br><small style="color:#555; margin-top:3px; display:block;">${{volatility < 10 ? '✅ Stable prices' : volatility < 30 ? '⚠️ Moderate variation' : '🔴 High volatility'}}</small></div>`;
+                                }}
                             }} else {{
                                 html += `<div style="padding:20px; background:#fff3e0; border-left:4px solid #ff9800; margin-top:10px; border-radius:4px; text-align:center;"><strong style="color:#e65100; font-size:14px;">⚠️ No Data Available</strong><br><small style="color:#666; margin-top:5px; display:block;">No price records found for <strong>${{commodity}}</strong> in <strong>${{year}}</strong></small></div>`;
                             }}
@@ -412,8 +498,13 @@ print("SUCCESS! Open the HTML file in your browser")
 print("="*80)
 
 # Export summaries
-summary = agg_data.groupby(['year','commodity']).agg({'min_price':'mean','max_price':'mean','avg_price':'mean','count':'sum'}).reset_index()
+summary = combined_data.groupby(['year','commodity','is_predicted']).agg({'min_price':'mean','max_price':'mean','avg_price':'mean','count':'sum'}).reset_index()
 summary.to_csv('summary_by_year_commodity.csv', index=False)
-agg_data.to_csv('detailed_province_data.csv', index=False)
+combined_data.to_csv('detailed_province_data.csv', index=False)
 print(f"✓ Summary: summary_by_year_commodity.csv")
 print(f"✓ Details: detailed_province_data.csv")
+
+# Export prediction summary
+pred_summary = pred_df.groupby(['year','commodity']).agg({'min_price':'mean','max_price':'mean','avg_price':'mean'}).reset_index()
+pred_summary.to_csv('predictions_2025_2026.csv', index=False)
+print(f"✓ Predictions: predictions_2025_2026.csv")
