@@ -1,0 +1,419 @@
+"""
+Indonesia Commodity Price Spatial Analysis - Complete Interactive Map
+Handles WIDE format data (provinces as columns) and reshapes to long format
+"""
+
+import pandas as pd
+import geopandas as gpd
+import json
+import numpy as np
+import os
+import warnings
+warnings.filterwarnings('ignore')
+
+print("="*80)
+print("INDONESIA COMMODITY PRICE INTERACTIVE MAP")
+print("="*80)
+
+# ============================================================================
+# MOUNT GOOGLE DRIVE
+# ============================================================================
+print("\n[STEP 0] Mounting Google Drive...")
+from google.colab import drive
+drive.mount('/content/drive')
+print("✓ Google Drive mounted\n")
+
+# ============================================================================
+# LOAD DATA
+# ============================================================================
+print("[PHASE 1-2] Loading Data...")
+print("-"*80)
+
+base_path = '/content/drive/MyDrive/Spatial Programming/Finals'
+shapefile_path = f'{base_path}/BATAS PROVINSI DESEMBER 2019 DUKCAPIL/BATAS_PROVINSI_DESEMBER_2019_DUKCAPIL.shp'
+commodity_base_path = f'{base_path}/Harga Bahan Pangan'
+
+commodity_files = {
+    'Shallots': 'Bawang Merah.csv',
+    'Garlic': 'Bawang Putih Bonggol.csv',
+    'Medium Rice': 'Beras Medium.csv',
+    'Premium Rice': 'Beras Premium.csv',
+    'Curly Red Chili': 'Cabai Merah Keriting.csv',
+    'Red Cayenne Pepper': 'Cabai Rawit Merah.csv',
+    'Broiler Chicken Meat': 'Daging Ayam Ras.csv',
+    'Pure Beef': 'Daging Sapi Murni.csv',
+    'Consumption Sugar': 'Gula Konsumsi.csv',
+    'Bulk Cooking Oil': 'Minyak Goreng Curah.csv',
+    'Simple Packaged Cooking Oil': 'Minyak Goreng Kemasan Sederhana.csv',
+    'Chicken Eggs': 'Telur Ayam Ras.csv',
+    'Bulk Wheat Flour': 'Tepung Terigu (Curah).csv'
+}
+
+print(f"Loading {len(commodity_files)} commodity datasets...")
+all_data = []
+
+for commodity_name, filename in commodity_files.items():
+    filepath = os.path.join(commodity_base_path, filename)
+    try:
+        df_temp = pd.read_csv(filepath)
+        
+        # Show structure of first file
+        if len(all_data) == 0:
+            print(f"\n📋 Data structure (first file: {commodity_name}):")
+            print(f"   Shape: {df_temp.shape}")
+            print(f"   Columns: {list(df_temp.columns[:5])}... (showing first 5)")
+            print(f"\n   First few rows:")
+            print(df_temp.head(3))
+        
+        # RESHAPE: Melt from wide to long format
+        # Assuming first column is Date, rest are provinces
+        date_col = df_temp.columns[0]
+        province_cols = [col for col in df_temp.columns if col != date_col]
+        
+        df_melted = pd.melt(
+            df_temp,
+            id_vars=[date_col],
+            value_vars=province_cols,
+            var_name='province',
+            value_name='price'
+        )
+        
+        # Rename date column
+        df_melted = df_melted.rename(columns={date_col: 'date'})
+        df_melted['commodity'] = commodity_name
+        
+        all_data.append(df_melted)
+        print(f"  ✓ {commodity_name}: {len(df_temp):,} dates × {len(province_cols)} provinces = {len(df_melted):,} records")
+        
+    except Exception as e:
+        print(f"  ✗ {commodity_name}: {e}")
+
+df = pd.concat(all_data, ignore_index=True)
+print(f"\n✓ Total combined: {len(df):,} records")
+print(f"✓ Columns: {list(df.columns)}")
+print(f"\n📊 Sample of reshaped data:")
+print(df.head(10))
+
+print("\n🗺️ Loading shapefile...")
+gdf = gpd.read_file(shapefile_path)
+print(f"✓ {len(gdf)} provinces loaded")
+print(f"   Shapefile columns: {list(gdf.columns)}")
+
+# ============================================================================
+# CLEAN DATA
+# ============================================================================
+print("\n[PHASE 3-4] Cleaning Data...")
+print("-"*80)
+
+# Convert data types
+print("Converting data types...")
+df['date'] = pd.to_datetime(df['date'], errors='coerce')
+df['year'] = df['date'].dt.year
+df['province'] = df['province'].astype(str).str.strip().str.upper()
+df['price'] = pd.to_numeric(df['price'], errors='coerce')
+
+print(f"✓ Data types converted")
+print(f"   Date range: {df['date'].min()} to {df['date'].max()}")
+print(f"   Years: {sorted(df['year'].dropna().unique())}")
+print(f"   Unique provinces: {df['province'].nunique()}")
+print(f"   Unique commodities: {df['commodity'].nunique()}")
+
+# Get shapefile province column
+print("\nProcessing shapefile...")
+prov_shp_col = None
+for col in gdf.columns:
+    if any(word in str(col).lower() for word in ['prov', 'nama', 'name', 'wadmpr']):
+        prov_shp_col = col
+        break
+
+if not prov_shp_col:
+    text_cols = gdf.select_dtypes(include=['object']).columns
+    if len(text_cols) > 0:
+        prov_shp_col = text_cols[0]
+
+print(f"   Province column in shapefile: {prov_shp_col}")
+gdf = gdf.rename(columns={prov_shp_col: 'province'})
+gdf['province'] = gdf['province'].astype(str).str.strip().str.upper()
+
+# Filter for 2022-2024 and clean
+print("\nFiltering and cleaning...")
+print(f"   Before filtering: {len(df):,} records")
+df = df[(df['year'] >= 2022) & (df['year'] <= 2024)].copy()
+print(f"   After year filter: {len(df):,} records")
+df = df.dropna(subset=['price', 'province', 'date'])
+print(f"   After removing nulls: {len(df):,} records")
+df = df[df['price'] > 0]
+print(f"   After removing ≤0 prices: {len(df):,} records")
+
+# Standardize province names
+print("\nStandardizing province names...")
+mappings = {
+    'DKI JAKARTA': 'DKI JAKARTA',
+    'JAKARTA': 'DKI JAKARTA',
+    'DI YOGYAKARTA': 'DI YOGYAKARTA',
+    'YOGYAKARTA': 'DI YOGYAKARTA',
+    'DIY': 'DI YOGYAKARTA',
+    'BANGKA BELITUNG': 'KEPULAUAN BANGKA BELITUNG',
+    'KEP. BANGKA BELITUNG': 'KEPULAUAN BANGKA BELITUNG',
+    'KEPULAUAN RIAU': 'KEPULAUAN RIAU',
+    'KEP. RIAU': 'KEPULAUAN RIAU',
+}
+
+for old, new in mappings.items():
+    df.loc[df['province'] == old, 'province'] = new
+
+# Check province matching
+provinces_data = set(df['province'].unique())
+provinces_shp = set(gdf['province'].unique())
+
+print(f"\n📍 Province matching:")
+print(f"   Provinces in data: {len(provinces_data)}")
+for p in sorted(list(provinces_data)[:5]):
+    print(f"      - {p}")
+print(f"   ... ({len(provinces_data)-5} more)")
+
+print(f"\n   Provinces in shapefile: {len(provinces_shp)}")
+for p in sorted(list(provinces_shp)[:5]):
+    print(f"      - {p}")
+print(f"   ... ({len(provinces_shp)-5} more)")
+
+# Try fuzzy matching for unmatched provinces
+from difflib import get_close_matches
+
+matched = provinces_data & provinces_shp
+unmatched_data = provinces_data - provinces_shp
+
+print(f"\n   Direct matches: {len(matched)}")
+
+if unmatched_data:
+    print(f"\n   🔍 Attempting fuzzy matching for {len(unmatched_data)} unmatched provinces...")
+    for prov_data in unmatched_data:
+        matches = get_close_matches(prov_data, list(provinces_shp), n=1, cutoff=0.7)
+        if matches:
+            print(f"      {prov_data} → {matches[0]}")
+            df.loc[df['province'] == prov_data, 'province'] = matches[0]
+        else:
+            print(f"      {prov_data} → No match found")
+    
+    # Recalculate matches
+    matched = set(df['province'].unique()) & provinces_shp
+    print(f"   ✓ Final matches: {len(matched)}")
+
+gdf = gdf.to_crs("EPSG:4326")
+commodities = sorted(df['commodity'].unique())
+
+print(f"\n✅ Cleaning complete:")
+print(f"   Records: {len(df):,}")
+print(f"   Commodities: {len(commodities)}")
+print(f"   Years: {sorted(df['year'].unique())}")
+print(f"   Matched provinces: {len(matched)}")
+
+# ============================================================================
+# AGGREGATE
+# ============================================================================
+print("\n[PHASE 5-6] Aggregating...")
+print("-"*80)
+
+agg_data = df.groupby(['province', 'commodity', 'year'])['price'].agg([
+    ('min_price', 'min'),
+    ('max_price', 'max'),
+    ('avg_price', 'mean'),
+    ('median_price', 'median'),
+    ('count', 'count')
+]).reset_index()
+
+print(f"✓ Aggregated to {len(agg_data):,} records")
+print(f"\n📊 Sample aggregation:")
+print(agg_data.head(10))
+
+for year in sorted(agg_data['year'].unique()):
+    year_data = agg_data[agg_data['year'] == year]
+    print(f"\n   {year}: {len(year_data):,} records")
+    print(f"      Provinces: {year_data['province'].nunique()}")
+    print(f"      Commodities: {year_data['commodity'].nunique()}")
+
+# ============================================================================
+# BUILD MAP
+# ============================================================================
+print("\n[PHASE 7] Building Interactive Map...")
+print("-"*80)
+
+# Prepare data dict
+print("Preparing data structure...")
+data_dict = {}
+for year in sorted(agg_data['year'].unique()):
+    year_key = int(year)  # Convert numpy.int32 to Python int
+    data_dict[year_key] = {}
+    for commodity in commodities:
+        data_dict[year_key][str(commodity)] = {}
+        subset = agg_data[(agg_data['year'] == year) & (agg_data['commodity'] == commodity)]
+        for _, row in subset.iterrows():
+            prov = str(row['province'])
+            data_dict[year_key][str(commodity)][prov] = {
+                'min': float(row['min_price']),
+                'max': float(row['max_price']),
+                'avg': float(row['avg_price']),
+                'median': float(row['median_price']) if pd.notna(row['median_price']) else float(row['avg_price']),
+                'count': int(row['count'])
+            }
+
+geojson_data = json.loads(gdf.to_json())
+center_lat = gdf.geometry.centroid.y.mean()
+center_lon = gdf.geometry.centroid.x.mean()
+
+print(f"✓ Data structure ready")
+print(f"   Years: {len(data_dict)}")
+print(f"   Commodities: {len(commodities)}")
+print(f"   Map center: ({center_lat:.4f}, {center_lon:.4f})")
+
+# Create HTML
+years_html = ' '.join(f'<option value="{y}" {"selected" if y==max(data_dict.keys()) else ""}>{y}</option>' for y in sorted(data_dict.keys()))
+commodities_html = ' '.join(f'<option value="{c}">{c}</option>' for c in commodities)
+
+html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Indonesia Commodity Price Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body {{ margin:0; padding:0; font-family: Arial, sans-serif; }}
+        #map {{ position: absolute; top:0; bottom:0; width:100%; }}
+        .info-panel {{
+            position: fixed; top: 10px; right: 10px; width: 320px; max-height: 90vh;
+            overflow-y: auto; background: white; padding: 15px; border: 2px solid #333;
+            border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 1000;
+        }}
+        .info-panel h3 {{ margin: 0 0 5px 0; color: #1976D2; font-size: 18px; }}
+        .info-panel select {{
+            width: 100%; padding: 8px; margin: 5px 0 10px 0; border: 2px solid #2196F3;
+            border-radius: 6px; cursor: pointer; font-size: 14px;
+        }}
+        .info-panel label {{ font-weight: bold; color: #555; display: block; margin-top: 10px; font-size: 13px; }}
+        .legend {{
+            position: fixed; bottom: 30px; right: 10px; background: white; padding: 12px;
+            border: 2px solid #333; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 1000;
+        }}
+        .legend-scale {{ display: flex; height: 20px; margin: 8px 0; border-radius: 3px; overflow: hidden; }}
+        .legend-labels {{ display: flex; justify-content: space-between; font-size: 11px; color: #666; }}
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div class="info-panel">
+        <h3>🗺️ Indonesia Commodity Prices</h3>
+        <p style="margin: 3px 0; font-size: 11px; color: #666;">Interactive price map (2022-2024)</p>
+        <label for="year-select">📅 Select Year:</label>
+        <select id="year-select" onchange="updateMap()">{years_html}</select>
+        <label for="commodity-select">🛒 Select Commodity:</label>
+        <select id="commodity-select" onchange="updateMap()">{commodities_html}</select>
+        <div style="margin-top: 15px; padding: 10px; background: #e3f2fd; border-radius: 4px; border-left: 4px solid #2196F3;">
+            <small><strong>💡 How to use:</strong><br>
+            • Select year and commodity<br>
+            • Click any province for details<br>
+            • Blue colors show price levels<br>
+            • Darker blue = Higher prices</small>
+        </div>
+        <div id="stats" style="margin-top: 10px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 11px;"></div>
+    </div>
+    <div class="legend">
+        <div style="font-weight: bold; margin-bottom: 8px; color: #1976D2; font-size: 14px;">💰 Price Scale (IDR)</div>
+        <div class="legend-scale" id="scale"></div>
+        <div class="legend-labels"><span id="lmin">Min</span><span id="lmax">Max</span></div>
+        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 11px; color: #666;">
+            <span style="display: inline-block; width: 15px; height: 15px; background: #f0f0f0; border: 1px solid #999; vertical-align: middle;"></span>
+            <span style="vertical-align: middle; margin-left: 5px;">No data available</span>
+        </div>
+    </div>
+    <script>
+        const priceData = {json.dumps(data_dict)};
+        const geojsonData = {json.dumps(geojson_data)};
+        const map = L.map('map').setView([{center_lat}, {center_lon}], 5);
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{attribution: '© OpenStreetMap'}}).addTo(map);
+        let currentLayer = null;
+        
+        function getColor(val, min, max) {{
+            if (!val || isNaN(val)) return '#f0f0f0';
+            const ratio = Math.max(0, Math.min(1, (val - min) / (max - min || 1)));
+            const blues = ['#f7fbff','#deebf7','#c6dbef','#9ecae1','#6baed6','#4292c6','#2171b5','#08519c','#08306b'];
+            return blues[Math.min(Math.floor(ratio * blues.length), blues.length-1)];
+        }}
+        
+        function fmt(v) {{ return 'Rp ' + Math.round(v).toLocaleString('id-ID'); }}
+        
+        function updateMap() {{
+            const year = parseInt(document.getElementById('year-select').value);
+            const commodity = document.getElementById('commodity-select').value;
+            const data = priceData[year]?.[commodity] || {{}};
+            const prices = Object.values(data).map(d => d.avg).filter(p => p && !isNaN(p));
+            const minP = prices.length > 0 ? Math.min(...prices) : 0;
+            const maxP = prices.length > 0 ? Math.max(...prices) : 100000;
+            
+            document.getElementById('lmin').textContent = fmt(minP);
+            document.getElementById('lmax').textContent = fmt(maxP);
+            
+            const scale = document.getElementById('scale');
+            scale.innerHTML = '';
+            ['#f7fbff','#deebf7','#c6dbef','#9ecae1','#6baed6','#4292c6','#2171b5','#08519c','#08306b'].forEach(c => {{
+                const d = document.createElement('div');
+                d.style.flex = '1';
+                d.style.background = c;
+                scale.appendChild(d);
+            }});
+            
+            if (prices.length > 0) {{
+                const avg = prices.reduce((a,b)=>a+b,0)/prices.length;
+                document.getElementById('stats').innerHTML = `<strong>📊 National Statistics:</strong><br><small>Provinces with data: ${{prices.length}}<br>National average: ${{fmt(avg)}}<br>Range: ${{fmt(maxP - minP)}}</small>`;
+            }} else {{
+                document.getElementById('stats').innerHTML = '<em style="color: #999;">No data for selection</em>';
+            }}
+            
+            if (currentLayer) map.removeLayer(currentLayer);
+            
+            currentLayer = L.geoJson(geojsonData, {{
+                style: f => ({{
+                    fillColor: getColor(data[f.properties.province]?.avg, minP, maxP),
+                    weight: 2, opacity: 1, color: '#666', fillOpacity: 0.7
+                }}),
+                onEachFeature: (f, layer) => {{
+                    layer.on({{
+                        mouseover: e => {{ e.target.setStyle({{weight:4, color:'#ff6b6b', fillOpacity:0.9}}); if (!L.Browser.ie) e.target.bringToFront(); }},
+                        mouseout: e => currentLayer.resetStyle(e.target),
+                        click: e => {{
+                            const prov = f.properties.province;
+                            const d = data[prov];
+                            let html = `<div style="font-family:Arial; min-width:280px;"><div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:12px; margin:-10px -10px 10px -10px; border-radius: 5px 5px 0 0;"><h4 style="margin:0; font-size:16px;">📍 ${{prov}}</h4></div><p style="margin:5px 0; padding:5px; color:#555; font-size:13px;"><strong>🛒 Commodity:</strong> ${{commodity}}<br><strong>📅 Year:</strong> ${{year}}</p>`;
+                            if (d) {{
+                                const range = d.max - d.min;
+                                const volatility = (range / d.avg * 100).toFixed(1);
+                                html += `<table style="width:100%; border-collapse:collapse; margin-top:10px;"><thead><tr style="background: linear-gradient(to right, #2196F3, #1976D2); color:white;"><th style="padding:8px; text-align:left; font-size:12px;">Metric</th><th style="padding:8px; text-align:right; font-size:12px;">Value (IDR)</th></tr></thead><tbody><tr style="background:#e3f2fd;"><td style="padding:8px; font-size:12px;"><strong>💰 Minimum</strong></td><td style="padding:8px; text-align:right; font-weight:bold; font-size:12px;">${{fmt(d.min)}}</td></tr><tr><td style="padding:8px; font-size:12px;"><strong>📊 Average</strong></td><td style="padding:8px; text-align:right; font-weight:bold; color:#1976D2; font-size:12px;">${{fmt(d.avg)}}</td></tr><tr style="background:#e3f2fd;"><td style="padding:8px; font-size:12px;"><strong>📈 Maximum</strong></td><td style="padding:8px; text-align:right; font-weight:bold; font-size:12px;">${{fmt(d.max)}}</td></tr><tr><td style="padding:8px; font-size:12px;">📏 Price Range</td><td style="padding:8px; text-align:right; font-size:12px;">${{fmt(range)}}</td></tr><tr style="background:#e3f2fd;"><td style="padding:8px; font-size:12px;">📋 Data Points</td><td style="padding:8px; text-align:right; font-size:12px;">${{d.count}}</td></tr></tbody></table><div style="margin-top:10px; padding:10px; background: linear-gradient(to right, #e8f5e9, #c8e6c9); border-left:4px solid #4CAF50; border-radius:4px;"><strong style="color:#2e7d32; font-size:12px;">📊 Volatility Index: ${{volatility}}%</strong><br><small style="color:#555; margin-top:3px; display:block;">${{volatility < 10 ? '✅ Stable prices' : volatility < 30 ? '⚠️ Moderate variation' : '🔴 High volatility'}}</small></div>`;
+                            }} else {{
+                                html += `<div style="padding:20px; background:#fff3e0; border-left:4px solid #ff9800; margin-top:10px; border-radius:4px; text-align:center;"><strong style="color:#e65100; font-size:14px;">⚠️ No Data Available</strong><br><small style="color:#666; margin-top:5px; display:block;">No price records found for <strong>${{commodity}}</strong> in <strong>${{year}}</strong></small></div>`;
+                            }}
+                            L.popup({{maxWidth: 350}}).setLatLng(e.latlng).setContent(html + '</div>').openOn(map);
+                        }}
+                    }});
+                }}
+            }}).addTo(map);
+        }}
+        updateMap();
+    </script>
+</body>
+</html>"""
+
+output_file = 'indonesia_commodity_price_map.html'
+with open(output_file, 'w', encoding='utf-8') as f:
+    f.write(html_content)
+
+print(f"\n✅ Map created: {output_file}")
+print("="*80)
+print("SUCCESS! Open the HTML file in your browser")
+print("="*80)
+
+# Export summaries
+summary = agg_data.groupby(['year','commodity']).agg({'min_price':'mean','max_price':'mean','avg_price':'mean','count':'sum'}).reset_index()
+summary.to_csv('summary_by_year_commodity.csv', index=False)
+agg_data.to_csv('detailed_province_data.csv', index=False)
+print(f"✓ Summary: summary_by_year_commodity.csv")
+print(f"✓ Details: detailed_province_data.csv")
